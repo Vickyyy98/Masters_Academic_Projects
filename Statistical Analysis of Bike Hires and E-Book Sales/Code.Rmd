@@ -1,0 +1,496 @@
+---
+title: 'Business Statistics End of Term Assessment IB94X0 2023-2024 #1'
+author: '5531616'
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+---
+
+---
+
+This is to certify that the work I am submitting is my own. All external references and sources are clearly acknowledged and identified within the contents. I am aware of the University of Warwick regulation concerning plagiarism and collusion.
+
+No substantial part(s) of the work submitted here has also been submitted by me in other assessments for accredited courses of study, and I acknowledge that if this has been done an appropriate reduction in the mark I might otherwise have received will be made.
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Hmisc)
+library(tidyverse)
+library(gridExtra)
+library(car)
+library(emmeans)
+library(lubridate) 
+options(width=100)
+options(max.print=999999)
+
+```
+
+
+# Question 1 - London Bike Hires - Covid
+
+In this part of the report, we're looking into how London's bike rental program has been doing since COVID-19 started. We want to make some easy-to-understand charts, see if any clear patterns pop up, and use some stats to figure out if there's a connection between the pandemic and how many bikes people are renting.
+
+The company really wants to know if rules like “Work from home”, “Rule of 6 indoors”, and “Eat Out to Help Out” made a difference in how many bikes people rented. They also want to see if these things mattered more at certain times than others.
+
+------
+
+## Data Dictionary
+
+| Variable                          | Description                                                                         |
+|----------------------|--------------------------------------------------|
+| `date`                            | The date on which the data were collected  |
+| `Hires`                           | The total number of bike hires recorded.|
+| `schools_closed`                  | A binary variable indicating the closure status of schools, with 0 for open and 1 for closed. |
+| `pubs_closed`                     | A binary variable indicating whether pubs were closed (1) or not (0). |
+| `shops_closed`                    | A binary variable signifying if shops were open (0) or closed (1). |
+| `eating_places_closed`            | A binary variable representing whether eating establishments were closed (1) or open (0). |
+| `stay_at_home`                    | A binary variable reflecting the enforcement of stay-at-home orders, where 1 denotes in effect and 0 denotes not in effect.|
+| `household_mixing_indoors_banned` | A binary indicator of whether mixing between different households indoors was prohibited (1) or allowed (0).|
+| `wfh`                             | An indicator variable for the implementation of work-from-home policies, with 0 indicating no policy and 1 indicating the policy was in place. |
+| `rule_of_6_indoors`               | A binary variable indicating adherence to the "Rule of 6" indoors policy, with 0 for not in place and 1 for in place.|
+| `curfew`                          | A binary variable indicating whether a curfew was active (1) or not (0).|
+| `eat_out_to_help_out`             | A binary variable that signifies if the "Eat Out to Help Out" initiative was active (1) or not (0). |
+| `day`                             | Day of the week (character)                                                   |
+| `month`                           | Month of the year (character)                                                 |
+| `year`                            | Year of recording                                                             |
+
+## Reading Data
+
+```{r}
+#Read the data
+bike.data<- read.csv("London_COVID_bikes.csv")
+
+#Check Summary of the data
+summary(bike.data)
+
+#Check structure of data
+str(bike.data)
+```
+
+## Data Understanding and Integrity Checks
+
+```{r}
+#Check distribution of bike hires and potential outliers
+mean_hires<- bike.data%>%summarise("Mean Hires"= mean(bike.data$Hires))
+
+ggplot() +
+  geom_histogram(bike.data, mapping = aes(x = Hires, binwidth = 300)) +
+  labs(x = "Bike Hires", y = "Frequency", title = "Frequency Distribution of Bike Hires") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+  geom_vline(data = mean_hires, mapping = aes(xintercept = `Mean Hires`), color = "red", linetype = "dashed")
+
+```
+
+```{r}
+#The data usually follows a regular pattern where, on average, about 26,532 bikes are rented each day. But sometimes, there's a big jump, and more than 60,000 bikes get rented in one day. We're going to leave these unusual days out of our study to keep our results fair and accurate, since they don't really fit with what normally happens.
+
+yearly_hires <- bike.data %>%
+  group_by(year) %>%
+  summarise(total_hires = sum(Hires))
+
+# Plotting a line chart to see the trend
+ggplot(yearly_hires, aes(x = year, y = total_hires)) + 
+  geom_line() +
+  labs(title = "Total Bike Hires Over the Years", x = "Year", y = "Total Number of Hires") + geom_vline(xintercept=2020, lty=2020)+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+cor(select(bike.data, Hires, wfh, eat_out_to_help_out, rule_of_6_indoors))
+```
+
+## Data Preparation
+
+```{r}
+#Filtering for -ve values
+bike.data.filtered <- filter(bike.data, Hires<60000)
+
+# Since we have data from 2010, but the policies started coming into effect due to covid, i.e, after 2019, it would be ideal to subset the data starting from 2019. This is because, 2019 data serves as a baseline or control. It shows what the bike hire numbers looked like under "normal" circumstances, without the influence of the COVID-19 policies. 2020 reflects the period when the policies were in effect. Analyzing this data can help us understand how each policy might have influenced the bike hire numbers.
+
+
+bike.data.filtered<- filter(bike.data.filtered, date> as.POSIXct("2019-01-01"))
+
+#Converting character columns into factors
+cols_name <- c("day","month", "eat_out_to_help_out","wfh","rule_of_6_indoors")
+bike.data.filtered[cols_name] <- lapply(bike.data.filtered[cols_name] , factor)
+
+bike.data.filtered <- bike.data.filtered %>%
+  mutate(month = factor(month, levels = c("Jan","Feb","Mar","Apr", "May", "Jun", "Jul", "Aug","Sep","Oct","Nov","Dec"), labels=c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")))
+
+
+bike.data.filtered <- bike.data.filtered %>%
+  mutate(day = factor(day, levels = c("Sun","Mon","Tue","Wed", "Thu", "Fri", "Sat"), labels=c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")))
+
+#Check for duplicates
+bike.data.filtered$date[duplicated(bike.data.filtered$date)]
+
+#Removing Duplicates
+bike.data.filtered<- bike.data.filtered[!duplicated(bike.data.filtered$date),]
+
+```
+
+
+## Effect of Policies on bike hires: Work From Home, Rule of 6 Indoors, and Eat Out to Help Out scheme.
+
+```{r}
+#Check the effect of policies on bike hires using 'lm' function
+m_bikes_policies<-lm(Hires~wfh+eat_out_to_help_out+rule_of_6_indoors, data = bike.data.filtered)
+
+summary(m_bikes_policies)
+
+# Estimation Approach - Confidence intervals
+cbind(coef(m_bikes_policies),confint(m_bikes_policies))
+
+```
+
+
+* We observe a significant positive effect on bike hires due to the eat out to help out and rule of 6 indoors polcies. The work from home policy shows a significant negative effect.
+
+* When a Work from Home policy is implemented, the bikes hired decreases by 2738 bikes t(1722) = -5.681, p< 0.001, 95% CI[-3683, -1793]. This means when the wfh policy is in place,the number of bike hires decreases.
+
+* When an Eat out to help out policy is implemented, the bikes hired increases by 6634 bikes, t(1722) = 3.636, p<0.001, 95% CI[3056, 10211]. People could have used bikes to get to the eating spots.
+
+* When a Rule of 6 Indoors policy is implemented, the bikes hired increases by 8456 bikes, t(1722) = 8.440, p<0.001, 95% CI[6491, 10421]. People may have used bikes to get to social gatherings.
+
+```{r}
+#Calculate Estimation Means
+m.bikes.emm <- emmeans(m_bikes_policies, ~ wfh+eat_out_to_help_out+rule_of_6_indoors)
+
+m.bikes.emm
+
+#Check Multicollinearity
+vif(m_bikes_policies)
+
+```
+
+* When there are no policies, the average bike hires is 29785 95% CI[29036, 30534]
+
+* When there is only a work from home policy in place, the average bike hires decreases to 27047 95% CI[26463, 27631]
+
+* When there is only an eat out to help out policy in place, the average bike hires increases to 36418 95% CI[32920, 39917]
+
+* When there is only a rule of 6 indoors policy in place, the average bike hires increases to 38241 95% CI[36162, 40320]
+
+## Effect of Bike hires - Controlling for time factors - Day, Month, Year
+
+```{r}
+#Controlling for year independently
+m_bikes_year <- lm (Hires ~ wfh + rule_of_6_indoors + eat_out_to_help_out + as.factor(year), data = bike.data.filtered)
+
+summary(m_bikes_year)
+
+#Check the effect of year on policies with interaction
+m_bikes_year_intr <- lm (Hires ~ (wfh + rule_of_6_indoors + eat_out_to_help_out) * as.factor(year), data = bike.data.filtered)
+
+summary(m_bikes_year_intr)
+
+#Compare the models using ANOVA
+anova(m_bikes_year,m_bikes_year_intr)
+```
+
+We see that m_bikes_year is significant. The F-statistic = 46.752 with (p < 2.2e-16) (highly significant) suggests that the inclusion of interaction terms significantly improves the model. The results illustrate that the interaction between the year and the factors of WFH, Rule of 6 Indoors, and Eat Out to Help Out is statistically significant in explaining the variation in bike hires. This suggests that the effect of these policies on bike hires is not uniform across different years and that their impact varies depending on the year, which indeed explains the impact of COVID policies on bike hire
+
+```{r}
+#Calculate confidence intervals
+cbind(coef(m_bikes_year_intr),confint(m_bikes_year_intr))
+```
+
+* In a baseline analysis for the year 2019 (Pre-COVID), the average number of bike hires was established at 28,601, t(1716)=61.724, 95% CI[27692,  29510], disregarding other factors.
+
+* The introduction of Work from Home (WFH) policies led to a significant decrease in bike hires, averaging a reduction of 13,099, t(1716) =-12.872 (p < 0.001), 95% CI[-15095, -11103].
+
+* In contrast, the implementation of the 'Rule of 6 Indoors' policy had significantly increased by of 15,532, t(1716) =11.748 , (p<0.001), 95% CI [12939,  18125] in bike hires. 
+
+* Additionally, the 'Eat Out to Help Out' scheme correlated with an average increase of 9,936 hires, t(1716)= 5.244, (p < 0.001),95% CI[6219, 13651].
+
+* The data also revealed significant interactions between these factors and specific years. For instance, there was an additional increase of 13,452 hires, (p < 0.001)CI[10573, 16330] in 2020 when WFH was in effect.
+
+* The combination of the 'Rule of 6 Indoors' with the year 2020 showed a significant decrease in hires by 9,959 (p < 0.001) 95% CI[-14064, -5853] 
+
+* 'Eat Out to Help Out' has no significant interaction with the years.
+
+* NA values indicate that since the policies were implemented only during COVID that is in the year 2020, there no data available for other years.
+
+```{r}
+#Controlling for month independently
+m_bikes_month <- lm (Hires ~ wfh + rule_of_6_indoors + eat_out_to_help_out  + month, data = bike.data.filtered)
+
+#Controlling for month using interaction
+m_bikes_month_intr <- lm (Hires ~(wfh + rule_of_6_indoors + eat_out_to_help_out) * month, data = bike.data.filtered)
+
+summary(m_bikes_month_intr)
+
+#Compare the models using ANOVA
+anova(m_bikes_month,m_bikes_month_intr)
+
+```
+
+Upon taking the Anova, it is concluded that "m_bikes_month_intr" is significant with the F-statistic = 3.8054 (p< 1.055e-06) ultimately suggesting that the interaction term is improving the model. As we look at the model without interaction, we see a general significant increase in bike hires during the "Summer" Months.(June, July, August) However, when we include the interactions with the policies this doesnt seem the case.
+
+
+```{r}
+#Calculating Confidence Intervals
+cbind(coef(m_bikes_month_intr),confint(m_bikes_month_intr))
+```
+
+* The baseline analysis for the month January, the average number of bike hires was established at 22644, t(1696)=23.316, (p< 2e-16), 95% CI[20740, 24549] , not taking other factors into consideration.
+
+* The introduction of Work from Home (WFH) policies led to a significant decrease in bike hires, averaging a reduction of 4048, t(1696) =-3.239 (p < 0.001),95% CI[-6499, -1596].
+
+* The implementation of the 'Rule of 6 Indoors' and 'Eat out to Help out 'policy did not have a significant impact across the months. 
+
+* The data also revealed significant interactions between these factors and specific months. For instance, there was an increase of 3718 hires, t(1696) = 2.041, (p < 0.05) 95% CI[145, 7291] in March and increase of 6466 hires, t(1696) = 3.177, (p < 0.05) 95% CI[2475 ,10457] in June when WFH was in effect.
+
+* A Significant decrease of 5374 hires, t(1696) = -3.048, (p<0.05) 95% CI[-8833, -1916] in September when WFH was in effect.
+
+* The combination of the 'Rule of 6 Indoors' with the month September showed a significant increase in hires by 6402, t(1696) = 2.174, (p < 0.05) 95% CI[626, 12179] 
+
+* 'Eat Out to Help Out' has no significant interaction with the months
+
+* NA values indicate that since the policies were implemented only during specific months,and there  are no data available for other months
+
+
+```{r}
+#Controlling the effect of day independently
+
+m_bikes_day<- lm (Hires ~(wfh + rule_of_6_indoors + eat_out_to_help_out) + day, data = bike.data.filtered)
+
+##Controlling the effect of day using interaction
+m_bikes_day_intr <- lm (Hires ~(wfh + rule_of_6_indoors + eat_out_to_help_out) * day, data = bike.data.filtered)
+
+summary(m_bikes_day_intr)
+
+#Compare the models using ANOVA
+anova(m_bikes_day,m_bikes_day_intr)
+```
+
+From the Anova results, it is concluded that "m_bikes_day_intr" is significant with the F-statistic = 2.4648 (p< 0.0005766) ultimately suggesting that the interaction term is significantly improving our model and analysis. The interaction between "wfh" is found to be more significant with weekdays as opposed to weekends. Given the nature of the COVID epidemic with its quarantine rules, it is a given that people transitioned into different forms of transport such as bicycle as a mode of transport and exercise to get around throughout weekdays.
+
+```{r}
+#Calculate confidence intervals
+cbind(coef(m_bikes_day_intr),confint(m_bikes_day_intr))
+```
+
+
+* The analysis reveals significant variations in the number of bike hires across different days of the week when considering work from home (WFH), rule of 6 indoors, and the 'Eat Out to Help Out' policy. 
+
+* The interaction terms suggest that the WFH policy affects the daily pattern of bike hires. For instance, the negative interaction between WFH and days of the week are as follows:
+    + Mondays decreases by 5693, 95% CI [-9153, -2233], t(1698) = -3.227, p = 0.001). 
+    + Tuesdays decreases by 5521, 95% CI [-9002, -2041], t(1698) = -3.111, p = 0.002), 
+    + Wednesdays decreases by 6237, 95% CI [-9709, -2765], t(1698) = -3.523, p < 0.001), 
+    + Thursdays decreases by 5242, 95% CI [-8715, -1771], t(1698) = -2.962, p = 0.003), and 
+    + Fridays decreases by 4154, 95% CI [-7628, -680], t(1698) = -2.345, p = 0.019).
+
+* There are no significant interactions between the 'Rule of 6 Indoors' or 'Eat Out to Help Out' policies with specific days of the week, suggesting these policies do not have a day-specific influence on the number of bike hires.
+
+
+```{r}
+#Calculate estimation means
+m.bikes.days.emm<-emmeans(m_bikes_day_intr, ~day)
+m.bikes.days.emm
+
+#Plotting emmeans for each day of the week
+ggplot(summary(m.bikes.days.emm), aes(y = emmean, x = day, ymin = lower.CL, ymax = upper.CL))+
+  geom_point()+
+  geom_linerange()+
+  labs(x= "Day of the Week", y = "Bike Hires", title = "Bike Hires VS Day")+
+  geom_line(aes(group = 1))+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+```{r}
+#Build a final model with the most suitable predictors
+m_bikes_final <- lm (Hires ~ wfh + rule_of_6_indoors + as.factor(year) + eat_out_to_help_out + wfh * day + month, data = bike.data.filtered)
+
+summary(m_bikes_final)
+
+cbind(coef(m_bikes_final),confint(m_bikes_final))
+
+```
+
+The baseline number of hires is established at 15,359. The Work from Home (WFH) policies correlates with a decrease of 2,920 hires, while the 'Rule of 6 Indoors' is associated with an increase of 3,269 hires. When comparing different years,it shows significant increases for 2020, 2021, and 2022 when compared to the baseline year. The Days of the week and months also have significant impacts, with higher hires on weekdays and during summer months, indicating seasonal trends. In contrast, the 'Eat Out to Help Out' scheme does not have a significant effect on the bike hires (p = 0.720). In addition to that, there are significant interactions between WFH policies and different days of the week, indicating that the effect of WFH on bike hires is day-dependent. On the whole, these results highlight the influential effects of WFH, indoor rules, specific years, and seasonal patterns on bike rentals.
+
+----------
+
+# Question 2 - Book Sales
+
+In this part of the report, we're going to look at how well an e-book publishing company is doing in terms of sales. We'll see if there's a link between how many books they sell and the ratings these books get. Also, we'll check if the price of the books affects how many are sold and if this changes depending on the type of book.
+
+------------
+
+## Data Dictionary
+
+| Variable                          | Description                                                                         |
+|----------------------|--------------------------------------------------|
+|sold by	|Name of seller |
+|publisher.type	|Type of publisher|
+|genre	|Genre of book sold|
+|avg.review	|Average review score during time period|
+|daily.sales|	Average daily sales during time period|
+|total.reviews	|Sum of reviews during time period|
+|sale.price	|Average sale price during time period|
+
+
+## Reading Data
+
+```{r}
+
+book.data <- read_csv("publisher_sales.csv")
+
+summary(book.data)
+
+str(book.data)
+
+book.data$genre <- as.factor(book.data$genre)
+
+```
+
+## Data Understanding and Integrity Check
+
+```{r}
+
+#Check distribution of Daily Sales and any potential outlier
+ggplot(book.data) + geom_histogram(aes(daily.sales))+ 
+  labs(title = "Distribution of Daily Sales",
+       x = "Average Review Score", y = "Frequency")+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+```
+
+
+```{r}
+# Histogram to check the distribution of total reviews and average review scores
+
+ggplot(book.data, aes(x = avg.review)) +
+  geom_histogram(binwidth = 0.5, fill ="red",alpha = 0.5) +
+  labs(title = "Distribution of Average Review Scores",
+       x = "Average Review Score", y = "Frequency")+  
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+#Distribution of Average Review Scores: The histogram is left skewed, showing that a huge number of the data points have high average review scores, with most of them lying between score of 4 and 5.
+
+ggplot(book.data, aes(x = total.reviews)) +
+  geom_histogram(binwidth = 5, fill = "blue", alpha= 0.5) +
+  labs(title = "Distribution of Total Reviews",
+       x = "Total Reviews", y = "Frequency")+  
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+#Distribution of Total Reviews: This histogram is slightly skewed distribution, with the highest frequency of products receiving a relatively small number of reviews.
+
+```
+
+
+```{r}
+#Plot a scatter plot between daily sales and total number of reviews
+ggplot(book.data, aes(y=daily.sales, x=total.reviews)) + 
+  geom_point(alpha=0.1) + geom_smooth(method = lm) + 
+  labs(x="Total number of Reviews", y="Daily Sales", title = "Distribution of Daily Sales by Total number of Reviews")+  theme(plot.title = element_text( size = 12, face = "bold", hjust = 0.5)) 
+
+
+#Plot a Scatter plot between daily sales and Average Review Score
+ggplot(book.data, aes(y=daily.sales, x=avg.review)) +
+  geom_point(alpha=0.1) + geom_smooth(method = lm) + 
+  labs(x="Average review score", y="Daily Sales", title = "Distribution of Daily Sales by Average Review Score")+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+```
+
+## Data Cleaning 
+
+```{r}
+# filter rows with -ve values
+book.data.filtered <- filter(book.data, daily.sales>0)
+```
+
+## Effect of average review scores and total number of reviews on Book Sales.
+
+```{r}
+#Performing Regression analysis using 'lm' function
+
+#Build a linear regression model with Daily Sales as response variable and average review score and total number of reviews as independent variables
+sales.by.avg.review <- lm(daily.sales ~ avg.review + total.reviews, data=book.data.filtered)
+
+summary(sales.by.avg.review)
+
+#Calculating confidence interval
+cbind(coef(sales.by.avg.review), confint(sales.by.avg.review))
+
+```
+
+When estimating the effect of both Average Review Score and Total Number of Reviews on Daily Sales of books in the same regression we find that when controlling for other variables, a 1 unit increase in Average Review Score predicts a decrease of around 4.3 books sold (t(5996) = -8.362, p\<0.001, 95% CI [-5.3, -3.3]) and an increase in total number of reviews by 1 predicts an increase in book sales by 0.5 (t(5996) = 68.961, p\<0.001, 95% CI [0.51, 0.54]).
+
+```{r}
+#Build a linear regression model with Daily Sales as response variable and average review score and total number of reviews with interaction terms
+model1.interaction <- lm(daily.sales ~ avg.review * total.reviews, data=book.data.filtered)
+summary(model1.interaction)
+
+#Evaluating both linear regression models using ANOVA
+anova(sales.by.avg.review,model1.interaction)
+
+```
+
+When we also include an interaction term in the model, the interaction is a significant predictor (t(5995) = 12.22, p\<0.001) and a model comparison test shows that the overall model fit is significantly improved (F(1,5995) = 149.21, p\<0.001).
+
+## Effect of Sale price and Genre on the number of sales
+
+```{r}
+
+# Split the data by genre
+data_genre_1 <- subset(book.data.filtered, genre == "adult_fiction")
+data_genre_2 <- subset(book.data.filtered, genre == "YA_fiction")
+data_genre_3 <- subset(book.data.filtered, genre == "non_fiction")
+
+# Create the plot
+ggplot() +
+  geom_point(data = data_genre_1, aes(y = daily.sales, x = sale.price, color = "Adult Fiction"), alpha = 0.1) +
+  geom_smooth(data = data_genre_1, aes(y = daily.sales, x = sale.price, color = "Adult Fiction"), method = "lm",se = FALSE, linetype = "dashed") +
+  
+  geom_point(data = data_genre_2, aes(y = daily.sales, x = sale.price, color = "YA Fiction"), alpha = 0.1) +
+  geom_smooth(data = data_genre_2, aes(y = daily.sales, x = sale.price, color = "YA Fiction"), method = "lm",se = FALSE, linetype = "dashed") +
+  
+  geom_point(data = data_genre_3, aes(y = daily.sales, x = sale.price, color = "Non-Fiction"), alpha = 0.1) +
+  geom_smooth(data = data_genre_3, aes(y = daily.sales, x = sale.price, color = "Non-Fiction"), method = "lm",se = FALSE, linetype = "dashed") +
+  
+  geom_smooth(data = book.data.filtered, aes(y = daily.sales, x = sale.price, color = "All Genres"), method = "lm", se = FALSE, linetype = "dashed") +
+  
+  scale_color_manual(values = c("Adult Fiction" = "red", "YA Fiction" = "skyblue", "Non-Fiction" = "purple", "All Genres" = "black")) +
+  
+  labs(title = "Effect of Total Number of Reviews on Daily Sales across Genres",
+       y = "Daily Sales",
+       x = "Sale Price",
+       color = "Genre") +  
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+```
+
+
+```{r}
+
+#Check the effect of Sales price on Daily Book Sales using linear regression
+daily.sales.by.sale.price <- lm(daily.sales ~ sale.price, data=book.data.filtered)
+summary(daily.sales.by.sale.price)
+
+#Find the Confidence Intervals
+confint(daily.sales.by.sale.price)
+```
+
+The linear regression analysis of the book.sales dataset reveals a significant negative relationship between sale price (sale.price) and daily sales of books (daily.sales). Specifically, the model indicates that for each unit increase in sale price, there is an average decrease of approximately 3.98 units in daily sales. This effect is statistically significant (t(5997) = -45.77, p \< 2e-16, 95% CI [-4.15, -3.81]).
+
+```{r}
+#Analyse the effect of Sales price and genre on Daily Book Sales using linear regression 
+daily.sales.intr.lm <- lm(daily.sales ~ genre * sale.price, data=book.data.filtered)
+summary(daily.sales.intr.lm)
+
+#Find the Confidence Intervals
+confint(daily.sales.intr.lm)
+
+```
+
+* The results indicate that the sale price has a negative effect on daily sales across genres, with an average decrease of 0.71 units in sales for each unit increase in the sale price (b = -0.71, CI [-1.20, -0.22], t(5993) = -2.858, p = 0.00428). The daily sales are significantly lower for books in the non-fiction genre compared to the baseline genre (Adult_Fiction) (b = -23.63, CI [-31.83, -15.43], t(5993) = -5.652, p = 1.66e-08). Conversely, books in the YA fiction genre have significantly higher daily sales (b = 53.09, CI [47.47, 58.71], t(5993) = 18.525, p \< 2e-16).
+
+* The interaction between genre and sale price for non-fiction is not significant, suggesting the decrease in daily sales with increasing sale price is not as pronounced in non-fiction books (b = 0.638, CI [-0.041, 1.318], t(5993) = 1.842, p = 0.06556). However, the interaction is significant for YA fiction, indicating a stronger negative impact of sale price on daily sales in this genre (b = -2.836, CI [-3.521, -2.151], t(5993) = -8.115, p = 5.83e-16), meaning that YA fiction books are more sensitive to sale price increases.
+
+```{r}
+#Check multicollinearity
+vif(daily.sales.intr.lm)
+```
+
+This shows high vif scores, but that this is due to structural multicollinearity, and the vif scores are low when interaction terms are excluded from the model.
